@@ -1,22 +1,13 @@
-name: Custom Version-20250222 - Workflow Dispatch
+name: Latest Version20250222 - Workflow Dispatch
 
 on:
   workflow_dispatch:
-    inputs:
-      version_to_patch:
-        description: 'The Version You Want to Patch'
-        required: true
-        default: '5.18.0'
 
-env:
-  VERSION_TO_PATCH: ${{ github.event.inputs.version_to_patch }}
-
-jobs: 
-
-  validate-version:
+jobs:
+  scrape_fe_version:
     runs-on: windows-latest
     outputs:
-      is_valid: ${{ steps.get_validity.outputs.is_valid }}
+      scraped_version: ${{ steps.set_scraped_version.outputs.scraped_version }}
 
     env:
       NODE_JS_VERSION: 22.9.0
@@ -32,66 +23,46 @@ jobs:
       - name: Cache Node.js dependencies
         uses: actions/cache@v4
         with:
-          path: utils/fe-version-validator/node_modules
-          key: ${{ runner.os }}-node-${{ env.NODE_JS_VERSION }}-${{ hashFiles('utils/fe-version-validator/package-lock.json') }}
+          path: utils/fe-version-scraper/node_modules
+          key: ${{ runner.os }}-node-${{ env.NODE_JS_VERSION }}-${{ hashFiles('utils/fe-version-scraper/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-node-${{ env.NODE_JS_VERSION }}-
 
       - name: Install Node.js dependencies
         run: npm ci
-        working-directory: utils/fe-version-validator
+        working-directory: utils/fe-version-scraper
 
       - name: Run the Node.js script
         run: node .
-        working-directory: utils/fe-version-validator
+        working-directory: utils/fe-version-scraper
 
-      - name: Get Version Validity
-        id: get_validity
-        shell: pwsh
+      - name: Read & Set Env
+        id: set_scraped_version
         run: |
-          $filePath = "utils/fe-version-validator/versions.txt"
-          $isValid = 'false'
-          $patchingVersion = $env:VERSION_TO_PATCH
-          
-          if (-not [string]::IsNullOrEmpty($patchingVersion)) {
-            if (Select-String -Path $filePath -Pattern $patchingVersion) {
-              $compareVersion = "5.9.0"
-              
-              if ([version]$patchingVersion -ge [version]$compareVersion) {
-                $isValid = 'true'
-                Write-Output "Valid Version found."
-              } else {
-                Write-Output "Version not Compatible."
-              }
-            } else {
-              Write-Output "Version Empty."
-            }
-          } else {
-            Write-Output "Version not found in List!"
-          }
-          
-          echo "is_valid=$isValid" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
- 
+          $fileContent = Get-Content -Path "utils/fe-version-scraper/latest_version.txt" -Raw
+          echo "scraped_version=$fileContent" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
+   
   download-Yui-patch:
     runs-on: windows-latest
+    needs: 
+      - scrape_fe_version
 
-    needs: validate-version
-
-    if: ${{ needs.validate-version.outputs.is_valid }} == 'true'
-    
+    env: 
+      SCRAPED_VERSION: ${{ needs.scrape_fe_version.outputs.scraped_version }}
+      
     outputs:
       is-compatible-cont: ${{ steps.is-compatible-cont.outputs.is-compatible-cont }}
       Yui-fiddler-name: ${{ steps.Yui-fiddler-name.outputs.Yui-fiddler-name }}
 
     steps:
-      - name: Compare Patching Version Compatible with 5.17.0
-        id: version_check
+      - name: Compare SCRAPED_VERSION with 5.17.0
+        id: scraped_version_check
         run: |
-          $patchingVersion = $env:VERSION_TO_PATCH
+          $scrapedVersion = $env:SCRAPED_VERSION
           $compareVersion = "5.17.0"
    
-          if (-not [string]::IsNullOrEmpty($patchingVersion)) {
-              if ([version]$patchingVersion -ge [version]$compareVersion) {
+          if (-not [string]::IsNullOrEmpty($scrapedVersion)) {
+              if ([version]$scrapedVersion -ge [version]$compareVersion) {
                   echo "IS_COMPATIBLE_CONT=true" | Out-File -Append -FilePath $env:GITHUB_ENV
               } else {
                   echo "IS_COMPATIBLE_CONT=false" | Out-File -Append -FilePath $env:GITHUB_ENV
@@ -174,10 +145,6 @@ jobs:
   download-msojocs-server:
     runs-on: windows-latest
 
-    needs: validate-version
-
-    if: ${{ needs.validate-version.outputs.is_valid }} == 'true'
-    
     steps:
       - name: Set up Git
         run: |
@@ -208,26 +175,25 @@ jobs:
   download-fiddler-everywhere:
     runs-on: windows-latest
 
-    needs: validate-version
-
-    if: ${{ needs.validate-version.outputs.is_valid }} == 'true'
+    needs: 
+      - scrape_fe_version
 
     steps:
       - name: Build URL & Download
         run: |
-          # Retrieve the patchingVersion version from the previous step
-          $patchingVersion = $env:VERSION_TO_PATCH
+          # Retrieve the scraped version from the previous step
+          $scrapedVersion = "${{ needs.scrape_fe_version.outputs.scraped_version }}"
           
-          # Check if the patchingVersion version is available
-          if (-not [string]::IsNullOrEmpty($patchingVersion)) {
-            $downloadUrl = "https://downloads.getfiddler.com/win/Fiddler%20Everywhere%20$patchingVersion.exe"
+          # Check if the scraped version is available
+          if (-not [string]::IsNullOrEmpty($scrapedVersion)) {
+            $downloadUrl = "https://downloads.getfiddler.com/win/Fiddler%20Everywhere%20$scrapedVersion.exe"
           
             Write-Host "Download URL: $downloadUrl"
 
             Invoke-WebRequest -Uri $downloadUrl -OutFile "FiddlerEverywhereSetup.exe"
             
           } else {
-            Write-Host "VERSION_TO_PATCH is empty or not set"
+            Write-Host "SCRAPED_VERSION is empty or not set"
             exit 1
           }
         shell: pwsh
@@ -253,6 +219,10 @@ jobs:
       - download-Yui-patch
       - download-msojocs-server
       - download-fiddler-everywhere
+      - scrape_fe_version
+
+    env:
+      SCRAPED_VERSION: ${{ needs.scrape_fe_version.outputs.scraped_version }}
 
     outputs:
       patched-fe-name: ${{ steps.rename-fe.outputs.patched-fe-name }}
@@ -433,7 +403,7 @@ jobs:
         id: rename-fe
         run: |
           if (Test-Path FE) {
-            $newName = "Fiddler-Everywhere-V$env:VERSION_TO_PATCH-Patched"
+            $newName = "Fiddler-Everywhere-V$env:SCRAPED_VERSION-Patched"
             
             Rename-Item -Path "FE" -NewName $newName
             
