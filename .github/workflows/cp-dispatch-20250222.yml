@@ -143,24 +143,26 @@ jobs:
         
       - name: Download Yui Patch
         run: |
-          try {
-            # Build the download URLs
-            $YuiFiddlerUrl = "https://github.com/project-yui/Yui-patch/releases/download/$env:Yui_RELEASE/$env:YUI_NAME-$env:Yui_FIDDLER_NAME-win32-x86_64-$env:Yui_RELEASE.dll"
-            $YuiHostPolicyUrl = "https://github.com/project-yui/Yui-patch/releases/download/$env:Yui_RELEASE/$env:YUI_NAME-hostpolicy-win32-x86_64-$env:Yui_RELEASE.dll"
-            
-            # Print the URLs to ensure they're correct
-            Write-Host "Downloading files from $env:Yui_RELEASE"
-            Write-Host "Yui Fiddler URL: $YuiFiddlerUrl"
-            Write-Host "Yui HostPolicy URL: $YuiHostPolicyUrl"
-
-            # Download the files
-            Invoke-WebRequest -Uri $YuiFiddlerUrl -OutFile "Yui\$env:Yui_FIDDLER_NAME.dll"
-            Invoke-WebRequest -Uri $YuiHostPolicyUrl -OutFile "Yui\hostpolicy.dll"
+          $retryCount = 0
+          $maxRetries = 3
+          $success = $false
+          
+          while (-not $success -and $retryCount -lt $maxRetries) {
+            try {
+              # 修正后的下载逻辑
+              $YuiFiddlerUrl = "https://github.com/project-yui/Yui-patch/releases/download/$env:Yui_RELEASE/$($env:YUI_NAME.ToLower())-$($env:Yui_FIDDLER_NAME.ToLower())-win32-x86_64-$env:Yui_RELEASE.dll"
+              $YuiHostPolicyUrl = "https://github.com/project-yui/Yui-patch/releases/download/$env:Yui_RELEASE/$($env:YUI_NAME.ToLower())-hostpolicy-win32-x86_64-$env:Yui_RELEASE.dll"
+      
+              Invoke-WebRequest -Uri $YuiFiddlerUrl -OutFile "Yui\$env:Yui_FIDDLER_NAME.dll"
+              Invoke-WebRequest -Uri $YuiHostPolicyUrl -OutFile "Yui\hostpolicy.dll"
+              $success = $true
+            } catch {
+              $retryCount++
+              Write-Host "Attempt $retryCount failed. Retrying in 5 seconds..."
+              Start-Sleep -Seconds 5
+            }
           }
-          catch {
-            Write-Error "Failed to download the patch files. Error details: $_"
-            exit 1
-          }
+          if (-not $success) { exit 1 }
         shell: pwsh
       
       - name: Upload Yui folder as an artifact
